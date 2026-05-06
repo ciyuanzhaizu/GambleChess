@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>怪物竞拍对战</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Main Menu -->
+    <div id="screen-menu" class="screen active">
+      <h1>⚔️ 怪物竞拍对战 ⚔️</h1>
+      <p class="subtitle">竞拍怪物 · 两两对战 · 下注博弈 · 争夺冠军</p>
+      <div class="menu-content">
+        <div class="card card-gold menu-card">
+          <h2>开始游戏</h2>
+          <div class="form-group">
+            <label>你的名字</label>
+            <input type="text" id="playerName" placeholder="输入你的名字" maxlength="10">
+          </div>
+          <div class="form-group">
+            <label>AI玩家数量</label>
+            <select id="aiCount">
+              <option value="3">3 个AI (共4人)</option>
+              <option value="4">4 个AI (共5人)</option>
+              <option value="5">5 个AI (共6人)</option>
+              <option value="6">6 个AI (共7人)</option>
+              <option value="7" selected>7 个AI (共8人)</option>
+            </select>
+          </div>
+          <button class="btn-primary" onclick="uiStartGame()">🎮 开始游戏</button>
+        </div>
+        <div class="card game-rules">
+          <h3>游戏规则</h3>
+          <p>1. 竞拍阶段：随机抽取8个怪物，依次竞拍，价高者得。</p>
+          <p>2. 战斗阶段：玩家两两配对进行战斗，胜者晋级下一轮。</p>
+          <p>3. 下注机制：可对非自己的战斗下注，猜中获5倍金币奖励。</p>
+          <p>4. 积分规则：每场战斗胜利 +100积分。</p>
+          <p>5. 胜利条件：首先达到1200积分，且赢得该轮最终胜利。</p>
+          <p>6. 单位克制：近战无法攻击空中单位。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Auction Screen -->
+    <div id="screen-auction" class="screen">
+      <div class="auction-header">
+        <h2>🏪 竞拍阶段</h2>
+        <span class="status-badge" id="auction-round">第 1 轮</span>
+        <span style="color:#ffd700">💰 你的金币: <strong id="auction-gold">0</strong></span>
+      </div>
+      <div class="monster-display" id="monster-display"></div>
+      <div id="auction-content"></div>
+      <div class="player-list" id="auction-players"></div>
+    </div>
+
+    <!-- Battle Screen -->
+    <div id="screen-battle" class="screen">
+      <div class="auction-header">
+        <h2>⚔️ 战斗阶段 - 第 <span id="battle-round-num">1</span> 轮</h2>
+        <span style="color:#ffd700">💰 你的金币: <strong id="battle-gold">0</strong></span>
+      </div>
+      <div class="battle-layout">
+        <div class="battle-main">
+          <div class="card battle-arena" id="battle-arena"></div>
+          <div class="card battle-log" id="battle-log-container"></div>
+          <div class="card tournament-view" id="tournament-view"></div>
+        </div>
+        <div class="battle-sidebar">
+          <div class="card bet-panel" id="bet-panel"></div>
+          <div class="card player-panel" id="battle-players"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Round End -->
+    <div id="screen-round-end" class="screen">
+      <div class="card card-gold round-end-card">
+        <h2 id="round-end-title">🏆 本回合结束！</h2>
+        <div id="round-end-content"></div>
+        <button class="btn-primary" disabled id="btn-next-round" onclick="uiNextRound()">开始下一轮竞拍...</button>
+      </div>
+    </div>
+
+    <!-- Game Over -->
+    <div id="screen-gameover" class="screen">
+      <div class="card card-gold game-over-card fade-in">
+        <div class="trophy">🏆</div>
+        <div class="winner-name" id="winner-name"></div>
+        <div class="winner-score" id="winner-score"></div>
+        <div id="final-standings"></div>
+        <button class="btn-primary" onclick="uiRestartGame()">🔄 返回主菜单</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/game.js"></script>
+  <script>
+    const game = new Game();
+    let _countdownInterval = null;
+
+    function showScreen(name) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      const screen = document.getElementById('screen-' + name);
+      if (screen) screen.classList.add('active');
+      if (name !== 'auction' && _countdownInterval) {
+        clearInterval(_countdownInterval);
+        _countdownInterval = null;
+      }
+    }
+
+    game.registerUpdate(render);
+
+    function render(g) {
+      switch (g.state) {
+        case 'MENU': renderMenu(); break;
+        case 'AUCTION': renderAuction(g); break;
+        case 'BATTLE_SETUP': renderBattleSetup(g); break;
+        case 'BATTLE': renderBattle(g); break;
+        case 'ROUND_END': renderRoundEnd(g); break;
+        case 'GAME_OVER': renderGameOver(g); break;
+      }
+    }
+
+    // ===== MENU =====
+    function renderMenu() {
+      showScreen('menu');
+    }
+
+    function uiStartGame() {
+      const name = document.getElementById('playerName').value.trim() || '你';
+      const aiCount = parseInt(document.getElementById('aiCount').value);
+      game.startGame(name, aiCount);
+    }
+
+    // ===== AUCTION =====
+    function renderAuction(g) {
+      showScreen('auction');
+
+      document.getElementById('auction-round').textContent = `第 ${g.currentRound} 轮`;
+      document.getElementById('auction-gold').textContent = g.humanPlayer.gold;
+
+      renderMonsterSlots(g);
+      renderAuctionContent(g);
+      renderAuctionPlayers(g);
+
+      if (!_countdownInterval && g.auctionCountdownEnd) {
+        _countdownInterval = setInterval(updateCountdown, 200);
+      }
+      if (_countdownInterval && !g.auctionCountdownEnd) {
+        clearInterval(_countdownInterval);
+        _countdownInterval = null;
+      }
+    }
+
+    function updateCountdown() {
+      const el = document.getElementById('countdown-timer');
+      if (!el) {
+        if (_countdownInterval) { clearInterval(_countdownInterval); _countdownInterval = null; }
+        return;
+      }
+      const ms = game.getAuctionCountdownMs();
+      if (ms <= 0) {
+        el.textContent = '0s';
+        el.classList.add('urgent');
+        return;
+      }
+      const seconds = Math.ceil(ms / 1000);
+      el.textContent = seconds + 's';
+      if (seconds <= 2) {
+        el.classList.add('urgent');
+      } else {
+        el.classList.remove('urgent');
+      }
+    }
+
+    function renderMonsterSlots(g) {
+      const container = document.getElementById('monster-display');
+      let html = '';
+
+      for (let i = 0; i < GAME_CONFIG.AUCTION_DISPLAY_COUNT; i++) {
+        const idx = g.auctionIndex + i;
+        if (idx >= g.auctionMonsters.length) {
+          html += '<div class="monster-slot"><div style="color:#555">-</div></div>';
+          continue;
+        }
+        const monster = g.auctionMonsters[idx];
+        const isRevealed = idx < g.auctionRevealed;
+        const isAuctioned = idx < g.auctionIndex;
+        const isCurrent = idx === g.auctionIndex;
+
+        if (!isRevealed) {
+          html += '<div class="monster-slot unknown"><div class="icon">❓</div><div class="name">???</div></div>';
+        } else if (isAuctioned) {
+          html += `<div class="monster-slot auctioned">
+            <div class="icon">${monster.icon}</div>
+            <div class="name">${monster.name}</div>
+            <div style="color:#e74c3c;font-size:0.7em;">已售出</div>
+          </div>`;
+        } else if (isCurrent) {
+          html += `<div class="monster-slot current">
+            <div class="icon">${monster.icon}</div>
+            <div class="name">${monster.name}</div>
+            <div class="type">${TYPE_LABELS[monster.type]}</div>
+            <div class="stats">ATK:${monster.atk} HP:${monster.hp} DEF:${monster.def}</div>
+          </div>`;
+        } else {
+          html += `<div class="monster-slot">
+            <div class="icon">${monster.icon}</div>
+            <div class="name">${monster.name}</div>
+            <div class="type">${TYPE_LABELS[monster.type]}</div>
+            <div class="stats">ATK:${monster.atk} HP:${monster.hp} DEF:${monster.def}</div>
+          </div>`;
+        }
+      }
+      container.innerHTML = html;
+    }
+
+    function renderAuctionContent(g) {
+      const container = document.getElementById('auction-content');
+      const monster = g.getCurrentAuctionMonster();
+
+      if (!monster) {
+        container.innerHTML = '<div class="card" style="text-align:center;padding:30px;">所有怪物已竞拍完毕！准备进入战斗阶段...</div>';
+        return;
+      }
+
+      const bidResult = g.auctionBidResult;
+      if (bidResult) {
+        const winner = g.players.find(p => p.id === bidResult.winner);
+        container.innerHTML = `<div class="card bid-result fade-in">
+          <div class="icon">${bidResult.monster.icon}</div>
+          <div class="winner-name">${winner ? winner.name : '未知'} 竞拍成功！</div>
+          <div class="bid-amount">成交价: ${bidResult.amount} 金币</div>
+          <div style="color:#888;margin-top:8px;">${bidResult.monster.name} - ${TYPE_LABELS[bidResult.monster.type]}</div>
+        </div>`;
+        return;
+      }
+
+      container.innerHTML = `<div class="auction-active">
+        <div class="card card-gold monster-detail">
+          <div class="icon">${monster.icon}</div>
+          <div class="name">${monster.name}</div>
+          <div class="desc">${monster.desc}</div>
+          <div class="stats-grid">
+            <div class="stat-item atk"><div class="value">${monster.atk}</div><div class="label">攻击</div></div>
+            <div class="stat-item hp"><div class="value">${monster.hp}</div><div class="label">血量</div></div>
+            <div class="stat-item def"><div class="value">${monster.def}</div><div class="label">防御</div></div>
+            <div class="stat-item spd"><div class="value">${monster.speed}</div><div class="label">攻速</div></div>
+          </div>
+          <div style="margin-top:10px;">
+            <span class="status-badge ${monster.type}">${TYPE_LABELS[monster.type]}</span>
+            ${monster.type === 'flying' ? '<span style="font-size:0.75em;color:#8e44ad;margin-left:8px;">免疫近战攻击</span>' : ''}
+            ${monster.type === 'melee' ? '<span style="font-size:0.75em;color:#c0392b;margin-left:8px;">无法攻击空中</span>' : ''}
+          </div>
+        </div>
+        <div class="card bid-section">
+          <h3 style="margin-bottom:4px;">📢 当前竞拍</h3>
+          ${g.auctionHighBidder ? `
+            <div class="current-bid-info">
+              <div class="bid-label">当前最高出价</div>
+              <div class="bid-name">${(g.players.find(p => p.id === g.auctionHighBidder) || {}).name || '未知'}</div>
+              <div class="bid-amount">💰 ${g.auctionHighBid}</div>
+            </div>
+          ` : '<div style="text-align:center;color:#666;padding:10px;">等待出价...</div>'}
+          ${g.auctionCountdownEnd ? `
+            <div class="countdown-display">
+              <div class="countdown-label">⏱ 倒计时</div>
+              <div class="countdown-timer" id="countdown-timer">${g.getAuctionCountdown()}s</div>
+            </div>
+          ` : ''}
+          ${g.humanPlayer.gold > 0 ? `
+            <div class="bid-buttons">
+              ${renderBidButtons(g)}
+            </div>
+            <button class="btn-dark" style="width:100%;margin-top:6px;" onclick="uiSkipBid()">跳过此怪物</button>
+          ` : '<div style="text-align:center;color:#e74c3c;">金币不足，无法出价</div>'}
+        </div>
+      </div>`;
+    }
+
+    function renderBidButtons(g) {
+      const highBid = g.auctionHighBid || 0;
+      const gold = g.humanPlayer.gold;
+      const buttons = [
+        { label: '+50', amount: highBid + 50, cls: 'btn-bid' },
+        { label: '100', amount: 100, cls: 'btn-bid' },
+        { label: '200', amount: 200, cls: 'btn-bid' },
+        { label: '300', amount: 300, cls: 'btn-bid' },
+        { label: '400', amount: 400, cls: 'btn-bid' },
+        { label: '500', amount: 500, cls: 'btn-bid' },
+        { label: 'ALL', amount: gold, cls: 'btn-bid-danger' }
+      ];
+      return buttons.map(b => {
+        const valid = b.amount > highBid && b.amount <= gold;
+        return `<button class="${b.cls}" ${valid ? '' : 'disabled'} onclick="${valid ? `uiBidAmount(${b.amount})` : ''}">${b.label}${b.label === 'ALL' ? '(' + gold + ')' : ''}</button>`;
+      }).join('');
+    }
+
+    function uiBidAmount(amount) {
+      if (amount <= game.auctionHighBid) {
+        alert('出价必须高于当前最高出价 ' + game.auctionHighBid + '！');
+        return;
+      }
+      game.humanBid(amount);
+    }
+
+    function uiPlaceBid() {
+      const input = document.getElementById('bid-amount');
+      const amount = parseInt(input.value) || 0;
+      if (amount <= 0 || amount > game.humanPlayer.gold) {
+        alert('请输入有效的出价金额！');
+        return;
+      }
+      if (amount <= game.auctionHighBid) {
+        alert('出价必须高于当前最高出价 ' + game.auctionHighBid + '！');
+        return;
+      }
+      game.humanBid(amount);
+    }
+
+    function uiSkipBid() {
+      game.humanBid(0);
+    }
+
+    function renderAuctionPlayers(g) {
+      const container = document.getElementById('auction-players');
+      container.innerHTML = g.players.map(p => {
+        const hasMonster = p.monsters && p.monsters.length > 0
+          ? '<span style="color:#ffd700">' + p.monsters.map(m => m.icon).join('') + ` x${p.monsters.length}</span>`
+          : '<span style="color:#666">无怪物</span>';
+        const humanClass = p.isHuman ? ' human' : '';
+        return `<div class="player-card${humanClass}">
+          <div class="p-icon">${p.isHuman ? '👤' : '🤖'}</div>
+          <div class="p-info">
+            <div class="p-name">${p.name}</div>
+            <div class="p-monster">${hasMonster}</div>
+          </div>
+          <div class="p-points">${p.score}分 | 💰${p.gold}</div>
+        </div>`;
+      }).join('');
+    }
+
+    // ===== BATTLE SETUP =====
+    function renderBattleSetup(g) {
+      if (_countdownInterval) { clearInterval(_countdownInterval); _countdownInterval = null; }
+      showScreen('battle');
+      document.getElementById('battle-round-num').textContent = g.currentRound;
+      document.getElementById('battle-gold').textContent = g.humanPlayer.gold;
+
+      renderPlayerPanel(g);
+      renderTournament(g);
+
+      document.getElementById('battle-arena').innerHTML = '<div style="text-align:center;padding:40px;color:#888;">准备开始战斗...</div>';
+      document.getElementById('battle-log-container').innerHTML = '<div style="color:#666;">等待战斗开始...</div>';
+      document.getElementById('bet-panel').innerHTML = '<h3>🎲 下注区</h3><div style="color:#666;">准备阶段...</div>';
+    }
+
+    function renderTournament(g) {
+      const container = document.getElementById('tournament-view');
+      if (!g.tournamentBracket || g.tournamentBracket.length === 0) {
+        container.innerHTML = '';
+        return;
+      }
+
+      let html = '<h2>🏆 锦标赛对阵</h2>';
+
+      g.tournamentBracket.forEach((round, idx) => {
+        html += `<div class="bracket-round"><h3>第 ${idx + 1} 轮</h3>`;
+        if (round.byePlayer) {
+          const bp = round.byePlayer;
+          html += `<div class="bye-player">🚀 ${bp.name}(${bp.monsters && bp.monsters.length > 0 ? bp.monsters[0].icon : '?'}) 保送晋级 (竞拍花费最高)</div>`;
+        }
+        round.pairs.forEach(pair => {
+          const resolved = g.battleResults.some(r => r.round === idx && r.winner === pair[0].id || r.winner === pair[1].id);
+          html += `<div class="bracket-pair${resolved ? ' resolved' : ''}">
+            <span>${pair[0].name}(${pair[0].monsters && pair[0].monsters.length > 0 ? pair[0].monsters[0].icon : '?'})</span>
+            <span class="bracket-vs">VS</span>
+            <span>${pair[1].name}(${pair[1].monsters && pair[1].monsters.length > 0 ? pair[1].monsters[0].icon : '?'})</span>
+          </div>`;
+        });
+        html += '</div>';
+      });
+      container.innerHTML = html;
+    }
+
+    // ===== BATTLE =====
+    function renderBattle(g) {
+      showScreen('battle');
+      document.getElementById('battle-round-num').textContent = g.currentRound;
+      document.getElementById('battle-gold').textContent = g.humanPlayer.gold;
+
+      renderBattleArena(g);
+      renderBattleLog(g);
+      renderTournament(g);
+      renderBetPanel(g);
+      renderPlayerPanel(g);
+    }
+
+    function renderBattleArena(g) {
+      const container = document.getElementById('battle-arena');
+      const battle = g.currentBattle;
+
+      if (!battle) {
+        container.innerHTML = '<div style="text-align:center;padding:40px;color:#888;">等待战斗...</div>';
+        return;
+      }
+
+      const p1 = battle.player1;
+      const p2 = battle.player2;
+      const monsters1 = p1.monsters || [];
+      const monsters2 = p2.monsters || [];
+
+      const hp1 = battle.resolved ? (battle.team1FinalHPs || []) : (battle.team1HPs || []);
+      const hp2 = battle.resolved ? (battle.team2FinalHPs || []) : (battle.team2HPs || []);
+      const active1 = battle.t1ActiveIdx || 0;
+      const active2 = battle.t2ActiveIdx || 0;
+
+      const winnerId = battle.resolved ? battle.winner : null;
+
+      function renderTeam(monsters, hps, activeIdx, player, side) {
+        const isWinner = winnerId === player.id;
+        const winnerClass = isWinner ? ' winner' : '';
+        const attackingClass = battle.attackingSide === side ? ' attacking' : '';
+        if (isWinner && attackingClass) return ''; // don't show attacking after resolved
+
+        return monsters.map((m, i) => {
+          const maxHp = m.hp;
+          const curHp = (hps && i < hps.length) ? Math.max(0, hps[i]) : maxHp;
+          const hpPercent = maxHp > 0 ? Math.max(0, (curHp / maxHp) * 100) : 0;
+          const hpClass = hpPercent <= 30 ? 'low' : '';
+          const isDead = curHp <= 0;
+          const isActive = i === activeIdx && !isDead && !battle.resolved;
+          const activeClass = isActive ? ' active' : '';
+          return `<div class="team-monster${winnerClass}${attackingClass}${activeClass}${isDead ? ' dead' : ''}" style="text-align:center;">
+            <div class="icon">${m.icon}</div>
+            <div class="c-hp-bar-outer"><div class="c-hp-bar-inner ${hpClass}" style="width:${hpPercent}%"></div></div>
+            <div class="c-hp-text">${curHp}/${maxHp}</div>
+          </div>`;
+        }).join('');
+      }
+
+      container.innerHTML = `
+        <div class="battle-arena-vs">
+          <div class="team-column" data-side="1">
+            <div class="c-player">${p1.name}${p1.isHuman ? ' 👑' : ''}</div>
+            ${renderTeam(monsters1, hp1, active1, p1, 1)}
+          </div>
+          <div class="vs-badge">⚡VS⚡</div>
+          <div class="team-column" data-side="2">
+            <div class="c-player">${p2.name}${p2.isHuman ? ' 👑' : ''}</div>
+            ${renderTeam(monsters2, hp2, active2, p2, 2)}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderBattleLog(g) {
+      const container = document.getElementById('battle-log-container');
+      const log = g.battleLog || [];
+      container.innerHTML = '<h3 style="margin-bottom:8px;font-size:0.9em;">📋 战斗日志</h3>' +
+        log.map(entry => `<div class="log-entry">${entry}</div>`).join('');
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function renderBetPanel(g) {
+      const container = document.getElementById('bet-panel');
+
+      const availableBattles = g.battles.filter(b => !b.resolved &&
+        b.player1.id !== g.humanPlayer.id && b.player2.id !== g.humanPlayer.id
+      );
+
+      if (availableBattles.length === 0) {
+        container.innerHTML = '<h3>🎲 下注区</h3><div style="color:#666;font-size:0.85em;">暂无不可下注的战斗</div>';
+        return;
+      }
+
+      let html = `<h3>🎲 下注区 (固定${GAME_CONFIG.BET_COST}💰, 赢返${GAME_CONFIG.BET_COST * GAME_CONFIG.BET_MULTIPLIER}💰)</h3>`;
+
+      availableBattles.forEach(battle => {
+        const p1 = battle.player1;
+        const p2 = battle.player2;
+        const mIcon1 = p1.monsters && p1.monsters.length > 0 ? p1.monsters[0].icon : '?';
+        const mIcon2 = p2.monsters && p2.monsters.length > 0 ? p2.monsters[0].icon : '?';
+        html += `<div class="bet-match">
+          <div class="match-label">${p1.name} VS ${p2.name}</div>
+          <div class="match-fighters">${mIcon1} ${p1.name} VS ${mIcon2} ${p2.name}</div>
+          <div class="bet-fighter-row">
+            <button class="btn-bet-fighter" onclick="uiPlaceBet('${battle.id}','${p1.id}')">${mIcon1} ${p1.name}</button>
+            <button class="btn-bet-fighter" onclick="uiPlaceBet('${battle.id}','${p2.id}')">${mIcon2} ${p2.name}</button>
+          </div>
+        </div>`;
+      });
+
+      container.innerHTML = html;
+    }
+
+    function uiPlaceBet(battleId, chosenId) {
+      if (game.humanPlayer.gold < GAME_CONFIG.BET_COST) {
+        alert('金币不足，无法下注！');
+        return;
+      }
+      const success = game.placeBet(game.humanPlayer.id, battleId, chosenId);
+      if (success) {
+        document.getElementById('battle-gold').textContent = game.humanPlayer.gold;
+      }
+    }
+
+    function renderPlayerPanel(g) {
+      const container = document.getElementById('battle-players');
+      const sorted = [...g.players].sort((a, b) => b.score - a.score);
+      container.innerHTML = '<h3>👥 玩家状态</h3>' +
+        sorted.map(p => {
+          const humanClass = p.isHuman ? ' highlight' : '';
+          const monster = p.monsters && p.monsters.length > 0 ? `<span>${p.monsters.map(m => m.icon).join('')}</span>` : '<span>❌</span>';
+          const status = p.isEliminated ? '(已淘汰)' : '';
+          return `<div class="player-info${humanClass}">
+            <span>${p.isHuman ? '👑' : '🤖'} ${p.name} ${monster} ${status}</span>
+            <span><span class="p-score">${p.score}分</span> <span class="p-gold">💰${p.gold}</span></span>
+          </div>`;
+        }).join('');
+    }
+
+    // ===== ROUND END =====
+    function renderRoundEnd(g) {
+      showScreen('round-end');
+
+      const sorted = [...g.players].sort((a, b) => b.score - a.score);
+      let content = '<div class="round-summary">本轮战斗已全部结束！</div>';
+      content += '<div style="max-width:400px;margin:0 auto;"><h3 style="margin-bottom:8px;">积分排行</h3>';
+      content += sorted.map((p, i) => {
+        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
+        return `<div class="player-info" style="${p.isHuman ? 'background:rgba(255,215,0,0.1);border-radius:4px;' : ''}">
+          <span>${medal} ${p.name}</span>
+          <span class="p-score">${p.score} 分</span>
+        </div>`;
+      }).join('');
+      content += '</div>';
+
+      document.getElementById('round-end-content').innerHTML = content;
+
+      const btn = document.getElementById('btn-next-round');
+      btn.disabled = false;
+      setTimeout(() => {
+        if (btn) btn.textContent = '开始下一轮竞拍...';
+      }, 1000);
+    }
+
+    function uiNextRound() {
+      document.getElementById('btn-next-round').disabled = true;
+      if (game._roundEndAction) {
+        const action = game._roundEndAction;
+        game._roundEndAction = null;
+        action();
+      }
+    }
+
+    // ===== GAME OVER =====
+    function renderGameOver(g) {
+      showScreen('gameover');
+
+      const sorted = [...g.players].sort((a, b) => b.score - a.score);
+      const winner = sorted[0];
+
+      document.getElementById('winner-name').textContent = winner.name + ' 获得了最终胜利！';
+      document.getElementById('winner-score').textContent = '最终积分: ' + winner.score;
+
+      let standings = '<h3 style="margin-top:16px;">最终排行</h3>';
+      standings += sorted.map((p, i) => {
+        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
+        return `<div class="player-info" style="font-size:0.9em;">${medal} ${p.name} - ${p.score} 分</div>`;
+      }).join('');
+      document.getElementById('final-standings').innerHTML = standings;
+    }
+
+    function uiRestartGame() {
+      if (_countdownInterval) { clearInterval(_countdownInterval); _countdownInterval = null; }
+      game.restartGame();
+    }
+  </script>
+</body>
+</html>
