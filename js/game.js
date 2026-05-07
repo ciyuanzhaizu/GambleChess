@@ -20,8 +20,10 @@ class Player {
   }
   set monster(v) {}
 
-  addMonster(monster) {
-    this.monsters.push({ ...monster });
+  addMonster(monster, count = 1) {
+    for (let i = 0; i < count; i++) {
+      this.monsters.push({ ...monster });
+    }
   }
 
   addScore(points) {
@@ -113,9 +115,7 @@ class Game {
       }
     });
 
-    const pool = this.buildMonsterPool();
-    const shuffled = pool.sort(() => Math.random() - 0.5);
-    this.auctionMonsters = shuffled.slice(0, GAME_CONFIG.AUCTION_MONSTER_COUNT);
+    this.auctionMonsters = this.buildAuctionGroups();
     this.auctionIndex = 0;
     this.auctionRevealed = GAME_CONFIG.AUCTION_DISPLAY_COUNT;
     this.currentBids = {};
@@ -126,23 +126,26 @@ class Game {
     setTimeout(() => this.runAuction(), 400);
   }
 
-  buildMonsterPool() {
-    const pool = [];
-    for (const m of MONSTER_CONFIG) {
-      const min = m.spawnMin || 0;
-      const max = m.spawnMax || 1;
+  buildAuctionGroups() {
+    const groups = [];
+    const available = [...MONSTER_CONFIG];
+    const used = [];
+    for (let i = 0; i < GAME_CONFIG.AUCTION_MONSTER_COUNT; i++) {
+      const m = available[Math.floor(Math.random() * available.length)];
+      const min = m.spawnMin == null ? 1 : m.spawnMin;
+      const max = m.spawnMax == null ? 1 : m.spawnMax;
       const count = min + Math.floor(Math.random() * (max - min + 1));
-      for (let i = 0; i < count; i++) {
-        pool.push(m);
-      }
+      groups.push({ monster: { ...m }, count });
+      used.push(m);
     }
-    return pool;
+    return groups;
   }
 
   getVisibleMonsters() {
     const revealed = Math.min(this.auctionRevealed, this.auctionMonsters.length);
-    return this.auctionMonsters.slice(0, revealed).map((m, i) => ({
-      monster: m,
+    return this.auctionMonsters.slice(0, revealed).map((g, i) => ({
+      monster: g.monster,
+      count: g.count,
       revealed: true,
       auctioned: i < this.auctionIndex
     }));
@@ -165,19 +168,20 @@ class Game {
 
   async runAuction() {
     if (this.state !== 'AUCTION') return;
-    const monster = this.getCurrentAuctionMonster();
-    if (!monster) {
+    const group = this.getCurrentAuctionMonster();
+    if (!group) {
       this.transitionToBattle();
       return;
     }
 
+    const monster = group.monster;
     this._auctionRunning = true;
     this.auctionHighBidder = null;
     this.auctionHighBid = 0;
     this.auctionCountdownEnd = null;
     this._aiBidCycleCount = 0;
 
-    const minBid = Math.floor(this.monsterMinValue(monster));
+    const minBid = Math.floor(this.monsterMinValue(monster) * group.count);
     this.currentBids = {};
     this.auctionBidHistory = [];
     this.players.forEach(p => { p.auctionBidCount = 0; });
@@ -185,7 +189,7 @@ class Game {
     this.update();
     await this.delay(600);
 
-    const initiator = this.pickAuctionInitiator(monster, minBid);
+    const initiator = this.pickAuctionInitiator(group, minBid);
     if (initiator) {
       this.auctionHighBidder = initiator.id;
       this.auctionHighBid = initiator.bid;
@@ -200,7 +204,8 @@ class Game {
     this.finalizeAuction();
   }
 
-  pickAuctionInitiator(monster, minBid) {
+  pickAuctionInitiator(group, minBid) {
+    const monster = group.monster;
     const candidates = this.players.filter(p => p.gold >= minBid);
     if (candidates.length === 0) return null;
 
@@ -259,8 +264,8 @@ class Game {
 
   _processAiBids() {
     if (this.state !== 'AUCTION' || !this._auctionRunning) return;
-    const monster = this.getCurrentAuctionMonster();
-    if (!monster) return;
+    const group = this.getCurrentAuctionMonster();
+    if (!group) return;
 
     this._aiBidCycleCount = (this._aiBidCycleCount || 0) + 1;
     if (this._aiBidCycleCount > GAME_CONFIG.AI_MAX_BID_CYCLES) {
@@ -278,7 +283,7 @@ class Game {
       if (player.gold <= this.auctionHighBid + 1) continue;
       if (!this._aiCanBid(player)) continue;
 
-      const bid = this.aiComputeBid(player, monster);
+      const bid = this.aiComputeBid(player, group);
       if (bid > bestBid && bid <= player.gold) {
         bestBid = bid;
         bestBidder = player;
@@ -307,8 +312,9 @@ class Game {
     return true;
   }
 
-  aiComputeBid(player, monster) {
-    const value = player.getMonsterValue(monster);
+  aiComputeBid(player, group) {
+    const monster = group.monster;
+    const value = player.getMonsterValue(monster) * group.count;
     const budget = player.gold;
     const minBid = Math.floor(value * 2.2);
 
@@ -360,15 +366,15 @@ class Game {
   finalizeAuction() {
     const winnerId = this.auctionHighBidder;
     const winningBid = this.auctionHighBid;
-    const monster = this.getCurrentAuctionMonster();
+    const group = this.getCurrentAuctionMonster();
 
-    if (winnerId && winningBid > 0 && monster) {
+    if (winnerId && winningBid > 0 && group) {
       const winner = this.players.find(p => p.id === winnerId);
       if (winner) {
         const actualBid = Math.min(winningBid, winner.gold);
         winner.spendGold(actualBid);
-        winner.addMonster(monster);
-        this.auctionBidResult = { winner: winnerId, amount: actualBid, monster };
+        winner.addMonster(group.monster, group.count);
+        this.auctionBidResult = { winner: winnerId, amount: actualBid, monster: group.monster, count: group.count };
       }
     }
 
@@ -745,6 +751,9 @@ class Game {
     if (!battle || battle.resolved) return false;
 
     if (battle.player1.id === bettorId || battle.player2.id === bettorId) return false;
+
+    const alreadyBet = this.bets.some(b => b.bettorId === bettorId && b.battleId === battleId);
+    if (alreadyBet) return false;
 
     bettor.spendGold(amount);
     this.bets.push({

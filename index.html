@@ -48,6 +48,7 @@
       <div class="auction-header">
         <h2>🏪 竞拍阶段</h2>
         <span class="status-badge" id="auction-round">第 1 轮</span>
+        <span class="status-badge" id="auction-progress">1/8</span>
         <span style="color:#ffd700">💰 你的金币: <strong id="auction-gold">0</strong></span>
       </div>
       <div class="monster-display" id="monster-display"></div>
@@ -135,11 +136,22 @@
       game.startGame(name, aiCount);
     }
 
+    function groupMonsters(monsters) {
+      if (!monsters || monsters.length === 0) return [];
+      const groups = {};
+      for (const m of monsters) {
+        if (!groups[m.id]) groups[m.id] = { icon: m.icon, name: m.name, type: m.type, count: 0 };
+        groups[m.id].count++;
+      }
+      return Object.values(groups);
+    }
+
     // ===== AUCTION =====
     function renderAuction(g) {
       showScreen('auction');
 
       document.getElementById('auction-round').textContent = `第 ${g.currentRound} 轮`;
+      document.getElementById('auction-progress').textContent = `${g.auctionIndex + 1}/${g.auctionMonsters.length}`;
       document.getElementById('auction-gold').textContent = g.humanPlayer.gold;
 
       renderMonsterSlots(g);
@@ -186,7 +198,8 @@
           html += '<div class="monster-slot"><div style="color:#555">-</div></div>';
           continue;
         }
-        const monster = g.auctionMonsters[idx];
+        const group = g.auctionMonsters[idx];
+        const monster = group.monster;
         const isRevealed = idx < g.auctionRevealed;
         const isAuctioned = idx < g.auctionIndex;
         const isCurrent = idx === g.auctionIndex;
@@ -197,19 +210,19 @@
           html += `<div class="monster-slot auctioned">
             <div class="icon">${monster.icon}</div>
             <div class="name">${monster.name}</div>
-            <div style="color:#e74c3c;font-size:0.7em;">已售出</div>
+            <div style="color:#e74c3c;font-size:0.7em;">已售出 x${group.count}</div>
           </div>`;
         } else if (isCurrent) {
           html += `<div class="monster-slot current">
             <div class="icon">${monster.icon}</div>
-            <div class="name">${monster.name}</div>
+            <div class="name">${monster.name} x${group.count}</div>
             <div class="type">${TYPE_LABELS[monster.type]}</div>
             <div class="stats">ATK:${monster.atk} HP:${monster.hp} DEF:${monster.def}</div>
           </div>`;
         } else {
           html += `<div class="monster-slot">
             <div class="icon">${monster.icon}</div>
-            <div class="name">${monster.name}</div>
+            <div class="name">${monster.name} x${group.count}</div>
             <div class="type">${TYPE_LABELS[monster.type]}</div>
             <div class="stats">ATK:${monster.atk} HP:${monster.hp} DEF:${monster.def}</div>
           </div>`;
@@ -220,13 +233,14 @@
 
     function renderAuctionContent(g) {
       const container = document.getElementById('auction-content');
-      const monster = g.getCurrentAuctionMonster();
+      const group = g.getCurrentAuctionMonster();
 
-      if (!monster) {
+      if (!group) {
         container.innerHTML = '<div class="card" style="text-align:center;padding:30px;">所有怪物已竞拍完毕！准备进入战斗阶段...</div>';
         return;
       }
 
+      const monster = group.monster;
       const bidResult = g.auctionBidResult;
       if (bidResult) {
         const winner = g.players.find(p => p.id === bidResult.winner);
@@ -234,7 +248,7 @@
           <div class="icon">${bidResult.monster.icon}</div>
           <div class="winner-name">${winner ? winner.name : '未知'} 竞拍成功！</div>
           <div class="bid-amount">成交价: ${bidResult.amount} 金币</div>
-          <div style="color:#888;margin-top:8px;">${bidResult.monster.name} - ${TYPE_LABELS[bidResult.monster.type]}</div>
+          <div style="color:#888;margin-top:8px;">${bidResult.monster.name} x${bidResult.count || 1} - ${TYPE_LABELS[bidResult.monster.type]}</div>
         </div>`;
         return;
       }
@@ -242,7 +256,7 @@
       container.innerHTML = `<div class="auction-active">
         <div class="card card-gold monster-detail">
           <div class="icon">${monster.icon}</div>
-          <div class="name">${monster.name}</div>
+          <div class="name">${monster.name} x${group.count}</div>
           <div class="desc">${monster.desc}</div>
           <div class="stats-grid">
             <div class="stat-item atk"><div class="value">${monster.atk}</div><div class="label">攻击</div></div>
@@ -252,6 +266,7 @@
           </div>
           <div style="margin-top:10px;">
             <span class="status-badge ${monster.type}">${TYPE_LABELS[monster.type]}</span>
+            <span style="margin-left:8px;color:#ffd700;font-weight:600;">数量: ${group.count}</span>
             ${monster.type === 'flying' ? '<span style="font-size:0.75em;color:#8e44ad;margin-left:8px;">免疫近战攻击</span>' : ''}
             ${monster.type === 'melee' ? '<span style="font-size:0.75em;color:#c0392b;margin-left:8px;">无法攻击空中</span>' : ''}
           </div>
@@ -328,15 +343,17 @@
     function renderAuctionPlayers(g) {
       const container = document.getElementById('auction-players');
       container.innerHTML = g.players.map(p => {
-        const hasMonster = p.monsters && p.monsters.length > 0
-          ? '<span style="color:#ffd700">' + p.monsters.map(m => m.icon).join('') + ` x${p.monsters.length}</span>`
+        const groups = groupMonsters(p.monsters);
+        const monsterDisplay = groups.length > 0
+          ? '<span style="color:#ffd700;display:inline-block;word-break:break-all;line-height:1.5;">' +
+            groups.map(grp => `${grp.icon}x${grp.count}`).join(' ') + '</span>'
           : '<span style="color:#666">无怪物</span>';
         const humanClass = p.isHuman ? ' human' : '';
         return `<div class="player-card${humanClass}">
           <div class="p-icon">${p.isHuman ? '👤' : '🤖'}</div>
           <div class="p-info">
             <div class="p-name">${p.name}</div>
-            <div class="p-monster">${hasMonster}</div>
+            <div class="p-monster">${monsterDisplay}</div>
           </div>
           <div class="p-points">${p.score}分 | 💰${p.gold}</div>
         </div>`;
@@ -419,39 +436,53 @@
       const active2 = battle.t2ActiveIdx || 0;
 
       const winnerId = battle.resolved ? battle.winner : null;
+      const COLS = 5;
 
-      function renderTeam(monsters, hps, activeIdx, player, side) {
+      function renderTeamColumns(monsters, hps, activeIdx, player, side) {
         const isWinner = winnerId === player.id;
-        const winnerClass = isWinner ? ' winner' : '';
-        const attackingClass = battle.attackingSide === side ? ' attacking' : '';
-        if (isWinner && attackingClass) return ''; // don't show attacking after resolved
+        const cols = [];
+        for (let i = 0; i < monsters.length; i += COLS) {
+          cols.push(monsters.slice(i, i + COLS));
+        }
 
-        return monsters.map((m, i) => {
-          const maxHp = m.hp;
-          const curHp = (hps && i < hps.length) ? Math.max(0, hps[i]) : maxHp;
-          const hpPercent = maxHp > 0 ? Math.max(0, (curHp / maxHp) * 100) : 0;
-          const hpClass = hpPercent <= 30 ? 'low' : '';
-          const isDead = curHp <= 0;
-          const isActive = i === activeIdx && !isDead && !battle.resolved;
-          const activeClass = isActive ? ' active' : '';
-          return `<div class="team-monster${winnerClass}${attackingClass}${activeClass}${isDead ? ' dead' : ''}" style="text-align:center;">
-            <div class="icon">${m.icon}</div>
-            <div class="c-hp-bar-outer"><div class="c-hp-bar-inner ${hpClass}" style="width:${hpPercent}%"></div></div>
-            <div class="c-hp-text">${curHp}/${maxHp}</div>
-          </div>`;
+        return cols.map((col, colIdx) => {
+          const monstersHtml = col.map((m, i) => {
+            const globalIdx = colIdx * COLS + i;
+            const maxHp = m.hp;
+            const curHp = (hps && globalIdx < hps.length) ? Math.max(0, hps[globalIdx]) : maxHp;
+            const hpPercent = maxHp > 0 ? Math.max(0, (curHp / maxHp) * 100) : 0;
+            const hpClass = hpPercent <= 30 ? 'low' : '';
+            const isDead = curHp <= 0;
+            const isActive = globalIdx === activeIdx && !isDead && !battle.resolved;
+            const activeClass = isActive ? ' active' : '';
+            const winnerClass = isWinner ? ' winner' : '';
+            const attackingClass = battle.attackingSide === side && isActive ? ' attacking' : '';
+
+            return `<div class="team-monster${winnerClass}${activeClass}${isDead ? ' dead' : ''}${attackingClass}" style="text-align:center;">
+              <div class="tm-icon">${m.icon}</div>
+              <div class="c-hp-bar-outer"><div class="c-hp-bar-inner ${hpClass}" style="width:${hpPercent}%"></div></div>
+              <div class="c-hp-text">${curHp}/${maxHp}</div>
+            </div>`;
+          }).join('');
+
+          return `<div class="team-column">${monstersHtml}</div>`;
         }).join('');
       }
 
       container.innerHTML = `
         <div class="battle-arena-vs">
-          <div class="team-column" data-side="1">
+          <div class="team-area" data-side="1">
             <div class="c-player">${p1.name}${p1.isHuman ? ' 👑' : ''}</div>
-            ${renderTeam(monsters1, hp1, active1, p1, 1)}
+            <div class="team-columns-wrap">
+              ${renderTeamColumns(monsters1, hp1, active1, p1, 1)}
+            </div>
           </div>
           <div class="vs-badge">⚡VS⚡</div>
-          <div class="team-column" data-side="2">
+          <div class="team-area" data-side="2">
             <div class="c-player">${p2.name}${p2.isHuman ? ' 👑' : ''}</div>
-            ${renderTeam(monsters2, hp2, active2, p2, 2)}
+            <div class="team-columns-wrap">
+              ${renderTeamColumns(monsters2, hp2, active2, p2, 2)}
+            </div>
           </div>
         </div>
       `;
@@ -467,32 +498,35 @@
 
     function renderBetPanel(g) {
       const container = document.getElementById('bet-panel');
+      const currentBattle = g.currentBattle;
 
-      const availableBattles = g.battles.filter(b => !b.resolved &&
-        b.player1.id !== g.humanPlayer.id && b.player2.id !== g.humanPlayer.id
-      );
-
-      if (availableBattles.length === 0) {
+      if (!currentBattle || currentBattle.resolved ||
+          (currentBattle.player1.id === g.humanPlayer.id || currentBattle.player2.id === g.humanPlayer.id)) {
         container.innerHTML = '<h3>🎲 下注区</h3><div style="color:#666;font-size:0.85em;">暂无不可下注的战斗</div>';
         return;
       }
 
+      const p1 = currentBattle.player1;
+      const p2 = currentBattle.player2;
+      const mIcon1 = p1.monsters && p1.monsters.length > 0 ? p1.monsters[0].icon : '?';
+      const mIcon2 = p2.monsters && p2.monsters.length > 0 ? p2.monsters[0].icon : '?';
+
+      const hasBet = g.bets.some(b => b.bettorId === g.humanPlayer.id && b.battleId === currentBattle.id);
+
       let html = `<h3>🎲 下注区 (固定${GAME_CONFIG.BET_COST}💰, 赢返${GAME_CONFIG.BET_COST * GAME_CONFIG.BET_MULTIPLIER}💰)</h3>`;
 
-      availableBattles.forEach(battle => {
-        const p1 = battle.player1;
-        const p2 = battle.player2;
-        const mIcon1 = p1.monsters && p1.monsters.length > 0 ? p1.monsters[0].icon : '?';
-        const mIcon2 = p2.monsters && p2.monsters.length > 0 ? p2.monsters[0].icon : '?';
+      if (hasBet) {
+        html += `<div class="bet-match"><div style="color:#888;text-align:center;">你已对本场战斗下注</div></div>`;
+      } else {
         html += `<div class="bet-match">
           <div class="match-label">${p1.name} VS ${p2.name}</div>
           <div class="match-fighters">${mIcon1} ${p1.name} VS ${mIcon2} ${p2.name}</div>
           <div class="bet-fighter-row">
-            <button class="btn-bet-fighter" onclick="uiPlaceBet('${battle.id}','${p1.id}')">${mIcon1} ${p1.name}</button>
-            <button class="btn-bet-fighter" onclick="uiPlaceBet('${battle.id}','${p2.id}')">${mIcon2} ${p2.name}</button>
+            <button class="btn-bet-fighter" onclick="uiPlaceBet('${currentBattle.id}','${p1.id}')">${mIcon1} ${p1.name}</button>
+            <button class="btn-bet-fighter" onclick="uiPlaceBet('${currentBattle.id}','${p2.id}')">${mIcon2} ${p2.name}</button>
           </div>
         </div>`;
-      });
+      }
 
       container.innerHTML = html;
     }
@@ -514,10 +548,14 @@
       container.innerHTML = '<h3>👥 玩家状态</h3>' +
         sorted.map(p => {
           const humanClass = p.isHuman ? ' highlight' : '';
-          const monster = p.monsters && p.monsters.length > 0 ? `<span>${p.monsters.map(m => m.icon).join('')}</span>` : '<span>❌</span>';
+          const groups = groupMonsters(p.monsters);
+          const monsterHtml = groups.length > 0
+            ? '<span style="display:inline-block;word-break:break-all;line-height:1.5;">' +
+              groups.map(grp => `${grp.icon}x${grp.count}`).join(' ') + '</span>'
+            : '<span>❌</span>';
           const status = p.isEliminated ? '(已淘汰)' : '';
           return `<div class="player-info${humanClass}">
-            <span>${p.isHuman ? '👑' : '🤖'} ${p.name} ${monster} ${status}</span>
+            <span>${p.isHuman ? '👑' : '🤖'} ${p.name} ${monsterHtml} ${status}</span>
             <span><span class="p-score">${p.score}分</span> <span class="p-gold">💰${p.gold}</span></span>
           </div>`;
         }).join('');
