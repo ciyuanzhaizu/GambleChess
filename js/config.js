@@ -15,7 +15,21 @@ const MONSTER_CONFIG = [
   { id: 'warlock', name: '术士', icon: '👿', atk: 33, hp: 90, def: 9, speed: 5, type: 'ranged', desc: '暗影力量的操控者', spawnMin: 1, spawnMax: 2 }
 ];
 
-const AI_NAMES = ['暗影刺客', '火焰法师', '冰霜战士', '雷霆射手', '风暴骑士', '月光猎人', '星辰术士'];
+const AI_PLAYERS = [
+  { name: '暗影刺客', betStyle: 'aggressive',    betFreq: 'offensive' },
+  { name: '火焰法师', betStyle: 'conservative',  betFreq: 'defensive' },
+  { name: '冰霜战士', betStyle: 'breakthrough',  betFreq: 'bargain' },
+  { name: '雷霆射手', betStyle: 'aggressive',    betFreq: 'defensive' },
+  { name: '风暴骑士', betStyle: 'conservative',  betFreq: 'offensive' },
+  { name: '月光猎人', betStyle: 'breakthrough',  betFreq: 'offensive' },
+  { name: '星辰术士', betStyle: 'conservative',  betFreq: 'bargain' },
+];
+
+const TYPE_LABELS = {
+  melee: '近战',
+  ranged: '远程',
+  flying: '空中'
+};
 
 const GAME_CONFIG = {
   DEFAULT_AI_COUNT: 7,
@@ -36,13 +50,4 @@ const GAME_CONFIG = {
   BATTLE_END_DELAY: 5000,
   BASE_ATTACK_DELAY: 1400,
   AI_MAX_BID_CYCLES: 6
-};
-
-const AI_BET_STYLES = ['conservative', 'aggressive', 'breakthrough'];
-const AI_BET_FREQS = ['defensive', 'offensive', 'bargain'];
-
-const TYPE_LABELS = {
-  melee: '近战',
-  ranged: '远程',
-  flying: '空中'
 };

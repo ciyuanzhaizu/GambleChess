@@ -1,5 +1,5 @@
 class Player {
-  constructor(id, name, isHuman = false) {
+  constructor(id, name, isHuman = false, betStyle = null, betFreq = null) {
     this.id = id;
     this.name = name;
     this.isHuman = isHuman;
@@ -9,8 +9,8 @@ class Player {
     this.totalSpent = 0;
     this.isEliminated = false;
     if (!isHuman) {
-      this.betStyle = AI_BET_STYLES[Math.floor(Math.random() * AI_BET_STYLES.length)];
-      this.betFreq = AI_BET_FREQS[Math.floor(Math.random() * AI_BET_FREQS.length)];
+      this.betStyle = betStyle;
+      this.betFreq = betFreq;
     }
     this.auctionBidCount = 0;
   }
@@ -92,10 +92,10 @@ class Game {
     this.humanPlayer = new Player('p0', playerName || '你', true);
     this.players.push(this.humanPlayer);
 
-    const shuffledNames = AI_NAMES.slice().sort(() => Math.random() - 0.5);
-    for (let i = 0; i < Math.min(aiCount, GAME_CONFIG.MAX_AI_COUNT); i++) {
-      const name = shuffledNames[i] || `AI_${i + 1}`;
-      this.players.push(new Player(`p${i + 1}`, name, false));
+    const shuffledAi = AI_PLAYERS.slice().sort(() => Math.random() - 0.5);
+    for (let i = 0; i < Math.min(aiCount, AI_PLAYERS.length); i++) {
+      const cfg = shuffledAi[i];
+      this.players.push(new Player(`p${i + 1}`, cfg.name, false, cfg.betStyle, cfg.betFreq));
     }
 
     this.currentRound = 0;
