@@ -14,22 +14,43 @@
       <p class="subtitle">竞拍怪物 · 两两对战 · 下注博弈 · 争夺冠军</p>
       <div class="menu-content">
         <div class="card card-gold menu-card">
-          <h2>开始游戏</h2>
-          <div class="form-group">
-            <label>你的名字</label>
-            <input type="text" id="playerName" placeholder="输入你的名字" maxlength="10">
+          <div class="mode-tabs">
+            <button class="tab active" onclick="switchMode('single')" id="tab-single">单人模式</button>
+            <button class="tab" onclick="switchMode('multi')" id="tab-multi">多人模式</button>
           </div>
-          <div class="form-group">
-            <label>AI玩家数量</label>
-            <select id="aiCount">
-              <option value="3">3 个AI (共4人)</option>
-              <option value="4">4 个AI (共5人)</option>
-              <option value="5">5 个AI (共6人)</option>
-              <option value="6">6 个AI (共7人)</option>
-              <option value="7" selected>7 个AI (共8人)</option>
-            </select>
+          <div id="menu-single">
+            <h2>开始游戏</h2>
+            <div class="form-group">
+              <label>你的名字</label>
+              <input type="text" id="playerName" placeholder="输入你的名字" maxlength="10">
+            </div>
+            <div class="form-group">
+              <label>AI玩家数量</label>
+              <select id="aiCount">
+                <option value="3">3 个AI (共4人)</option>
+                <option value="4">4 个AI (共5人)</option>
+                <option value="5">5 个AI (共6人)</option>
+                <option value="6">6 个AI (共7人)</option>
+                <option value="7" selected>7 个AI (共8人)</option>
+              </select>
+            </div>
+            <button class="btn-primary" onclick="uiStartGame()">🎮 开始游戏</button>
           </div>
-          <button class="btn-primary" onclick="uiStartGame()">🎮 开始游戏</button>
+          <div id="menu-multi" style="display:none;">
+            <h2>多人联机</h2>
+            <div class="form-group">
+              <label>你的名字</label>
+              <input type="text" id="mpName" placeholder="输入你的名字" maxlength="10">
+            </div>
+            <button class="btn-primary" onclick="uiCreateRoom()" style="margin-bottom:12px;">🏠 创建房间</button>
+            <div class="form-group" style="margin-top:12px;">
+              <label>加入房间</label>
+              <div style="display:flex;gap:8px;">
+                <input type="text" id="joinRoomCode" placeholder="房间号" maxlength="6" style="flex:1;">
+                <button class="btn-primary" onclick="uiJoinRoom()">加入</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="card game-rules">
           <h3>游戏规则</h3>
@@ -40,6 +61,22 @@
           <p>5. 胜利条件：首先达到1200积分，且赢得该轮最终胜利。</p>
           <p>6. 单位克制：近战无法攻击空中单位。</p>
         </div>
+      </div>
+    </div>
+
+    <!-- Room Lobby -->
+    <div id="screen-lobby" class="screen">
+      <div class="card card-gold" style="max-width:420px;margin:40px auto 0;text-align:center;padding:24px;">
+        <h2 id="lobby-title">🏠 房间大厅</h2>
+        <div id="lobby-room-code" style="font-size:2em;color:#ffd700;letter-spacing:4px;margin:12px 0;">------</div>
+        <div style="color:#888;font-size:0.85em;">把房间号发给朋友即可加入</div>
+        <h3 style="margin-top:16px;">👥 玩家列表</h3>
+        <div id="lobby-players" style="margin:8px 0;"></div>
+        <div id="lobby-controls"></div>
+        <div style="margin-top:12px;">
+          <span style="color:#e74c3c;font-size:0.85em;display:none;" id="lobby-error"></span>
+        </div>
+        <button class="btn-dark" onclick="uiLeaveRoom()" style="margin-top:16px;">离开房间</button>
       </div>
     </div>
 
@@ -96,11 +133,15 @@
     </div>
   </div>
 
+  <script src="/socket.io/socket.io.js"></script>
   <script src="js/config.js"></script>
+  <script src="js/network.js"></script>
   <script src="js/game.js"></script>
   <script>
     const game = new Game();
+    const Net = new Network();
     let _countdownInterval = null;
+    let _selectedMode = 'single';
 
     function showScreen(name) {
       document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -112,17 +153,163 @@
       }
     }
 
+    function switchMode(mode) {
+      _selectedMode = mode;
+      document.getElementById('tab-single').classList.toggle('active', mode === 'single');
+      document.getElementById('tab-multi').classList.toggle('active', mode === 'multi');
+      document.getElementById('menu-single').style.display = mode === 'single' ? '' : 'none';
+      document.getElementById('menu-multi').style.display = mode === 'multi' ? '' : 'none';
+    }
+
     game.registerUpdate(render);
 
     function render(g) {
       switch (g.state) {
         case 'MENU': renderMenu(); break;
+        case 'WAITING': renderWaiting(g); break;
         case 'AUCTION': renderAuction(g); break;
         case 'BATTLE_SETUP': renderBattleSetup(g); break;
         case 'BATTLE': renderBattle(g); break;
         case 'ROUND_END': renderRoundEnd(g); break;
         case 'GAME_OVER': renderGameOver(g); break;
       }
+    }
+
+    // ===== MULTIPLAYER NETWORK SETUP =====
+    Net.on('room-created', (roomId) => {
+      document.getElementById('lobby-room-code').textContent = roomId;
+      document.getElementById('lobby-title').textContent = '🏠 我的房间';
+      renderLobbyControls();
+    });
+    Net.on('room-joined', (roomId) => {
+      document.getElementById('lobby-room-code').textContent = roomId;
+      document.getElementById('lobby-title').textContent = '🏠 已加入房间';
+      renderLobbyControls();
+    });
+    Net.on('join-error', (msg) => {
+      document.getElementById('lobby-error').textContent = msg;
+      document.getElementById('lobby-error').style.display = '';
+      setTimeout(() => { document.getElementById('lobby-error').style.display = 'none'; }, 3000);
+    });
+    Net.on('room-update', (data) => {
+      renderLobbyPlayers(data);
+      renderLobbyControls();
+    });
+    Net.on('game-start', (data) => {
+      const name = document.getElementById('mpName').value.trim() || '你';
+      if (Net.isHost) {
+        const guests = data.players.filter(p => p.id !== Net.myId).map(p => ({ id: p.id, name: p.name }));
+        game.startMultiplayerHost(name, guests, data.aiCount);
+        game.setNetwork(Net);
+      } else {
+        game.startMultiplayerGuest(name);
+        game.setNetwork(Net);
+      }
+    });
+    Net.on('game-sync', (state) => {
+      if (game.mode === 'guest') game.applySnapshot(state);
+    });
+    Net.on('guest-action', ({ playerId, action }) => {
+      if (game.mode === 'host') {
+        if (action.type === 'bid') {
+          game.processRemoteBid(playerId, action.amount);
+        } else if (action.type === 'bet') {
+          game.processRemoteBet(playerId, action.battleId, action.chosenId);
+        }
+      }
+    });
+    Net.on('back-to-lobby', () => {
+      game.state = 'MENU';
+      game.mode = 'single';
+      showScreen('lobby');
+      renderLobbyControls();
+    });
+
+    async function connectAndThen(fn) {
+      if (!Net.socket) {
+        try { await Net.connect(); } catch (e) {
+          alert('无法连接到服务器，请确认服务器已启动');
+          return;
+        }
+      }
+      fn();
+    }
+
+    function uiCreateRoom() {
+      const name = document.getElementById('mpName').value.trim() || '你';
+      connectAndThen(() => {
+        Net.createRoom(name, 0);
+        showScreen('lobby');
+      });
+    }
+
+    function uiJoinRoom() {
+      const code = document.getElementById('joinRoomCode').value.trim();
+      if (!code) return;
+      const name = document.getElementById('mpName').value.trim() || '你';
+      connectAndThen(() => {
+        Net.joinRoom(code, name);
+        showScreen('lobby');
+      });
+    }
+
+    function uiLeaveRoom() {
+      Net.leaveRoom();
+      showScreen('menu');
+    }
+
+    function renderLobbyPlayers(data) {
+      const container = document.getElementById('lobby-players');
+      if (!data || !data.players) { container.innerHTML = ''; return; }
+      container.innerHTML = data.players.map((p, i) =>
+        `<div class="player-info">${p.id === data.hostId ? '👑' : ''} ${p.name}</div>`
+      ).join('');
+    }
+
+    function renderLobbyControls() {
+      const container = document.getElementById('lobby-controls');
+      if (Net.isHost) {
+        const aiCount = Net._lastAiCount || 3;
+        container.innerHTML = `
+          <div class="form-group" style="margin-top:8px;">
+            <label>AI 填补数量</label>
+            <select id="mpAiCount" onchange="Net._lastAiCount=parseInt(this.value);Net.setAiCount(parseInt(this.value))">
+              <option value="0" ${aiCount===0?'selected':''}>0 (纯玩家)</option>
+              <option value="1" ${aiCount===1?'selected':''}>1</option>
+              <option value="2" ${aiCount===2?'selected':''}>2</option>
+              <option value="3" ${aiCount===3?'selected':''}>3</option>
+              <option value="5" ${aiCount===5?'selected':''}>5</option>
+              <option value="7" ${aiCount===7?'selected':''}>7</option>
+            </select>
+          </div>
+          <button class="btn-primary" onclick="uiHostStart()" style="margin-top:8px;">🎮 开始游戏</button>
+        `;
+      } else {
+        container.innerHTML = '<div style="color:#888;">等待房主开始游戏...</div>';
+      }
+    }
+
+    function uiHostStart() {
+      Net.startGame();
+    }
+
+    // Waiting screen for guest
+    function renderWaiting(g) {
+      showScreen('auction');
+      document.getElementById('auction-round').textContent = '等待中';
+      document.getElementById('auction-progress').textContent = '-';
+      document.getElementById('auction-gold').textContent = '-';
+      document.getElementById('monster-display').innerHTML = '';
+      document.getElementById('auction-content').innerHTML = '<div class="card" style="text-align:center;padding:30px;color:#888;">等待房主开始游戏...</div>';
+      document.getElementById('auction-players').innerHTML = '';
+    }
+
+    function uiRestartGame() {
+      if (_countdownInterval) { clearInterval(_countdownInterval); _countdownInterval = null; }
+      if (game.mode === 'host') {
+        Net.signalGameOver();
+      }
+      game.restartGame();
     }
 
     // ===== MENU =====
@@ -315,6 +502,10 @@
     }
 
     function uiBidAmount(amount) {
+      if (game.mode === 'guest') {
+        Net.sendAction({ type: 'bid', amount });
+        return;
+      }
       if (amount <= game.auctionHighBid) {
         alert('出价必须高于当前最高出价 ' + game.auctionHighBid + '！');
         return;
@@ -337,6 +528,10 @@
     }
 
     function uiSkipBid() {
+      if (game.mode === 'guest') {
+        Net.sendAction({ type: 'skip' });
+        return;
+      }
       game.humanBid(0);
     }
 
@@ -678,6 +873,10 @@
     }
 
     function uiPlaceBet(battleId, chosenId) {
+      if (game.mode === 'guest') {
+        Net.sendAction({ type: 'bet', battleId, chosenId });
+        return;
+      }
       if (game.humanPlayer.gold < GAME_CONFIG.BET_COST) {
         alert('金币不足，无法下注！');
         return;
