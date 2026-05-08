@@ -512,7 +512,15 @@ input[type="number"]:focus {
 
 .battle-arena {
   text-align: center;
-  padding: 20px;
+  padding: 12px;
+}
+
+#battle-canvas {
+  display: block;
+  margin: 0 auto;
+  border-radius: 4px;
+  max-width: 100%;
+  height: auto;
 }
 
 .battle-arena-vs {

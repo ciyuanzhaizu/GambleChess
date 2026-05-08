@@ -514,10 +514,9 @@ class Game {
       this.update();
       await this.delay(GAME_CONFIG.BATTLE_PRE_DELAY);
 
-      const result = this.simulateBattle(battle.player1, battle.player2);
+      const result = this.simulateBattleTicks(battle.player1, battle.player2);
       battle.rounds = result.rounds;
-      battle.team1FinalHPs = result.team1.map(m => Math.max(0, m.hp));
-      battle.team2FinalHPs = result.team2.map(m => Math.max(0, m.hp));
+      battle.team1FinalHPs = result.team1 ? result.team1.map(m => Math.max(0, m.hp)) : [];
       battle.log = result.log;
 
       await this.animateBattle(battle, result);
@@ -619,121 +618,127 @@ class Game {
     this.runBattleRound();
   }
 
-  simulateBattle(player1, player2) {
-    const team1 = player1.monsters.map(m => ({ ...m, maxHp: m.hp }));
-    const team2 = player2.monsters.map(m => ({ ...m, maxHp: m.hp }));
+  simulateBattleTicks(player1, player2) {
+    const COLS = GAME_CONFIG.BATTLE_COLS;
+    const ROWS = GAME_CONFIG.BATTLE_ROWS;
     const log = [];
-    const rounds = [];
-    let t1Idx = 0, t2Idx = 0;
+    const units = [];
 
-    log.push(`⚔️ ${player1.name}(${team1.map(m => m.icon).join('')}) VS ${player2.name}(${team2.map(m => m.icon).join('')})`);
+    const addTeam = (monsters, playerId, startCol, maxCol) => {
+      for (let i = 0; i < monsters.length; i++) {
+        const m = monsters[i];
+        const col = startCol + Math.floor(i / ROWS);
+        if (col > maxCol) break;
+        units.push({
+          id: `${playerId}_${i}`,
+          playerId,
+          monster: m,
+          col: Math.min(col, maxCol),
+          row: i % ROWS,
+          hp: m.hp, maxHp: m.hp,
+          cooldown: 0,
+          alive: true
+        });
+      }
+    };
+    addTeam(player1.monsters, player1.id, 0, 2);
+    addTeam(player2.monsters, player2.id, COLS - 3, COLS - 1);
+
+    log.push(`⚔️ ${player1.name} VS ${player2.name}`);
     log.push('');
 
-    rounds.push({
-      attacker: 0, team1HPs: team1.map(m => m.hp), team2HPs: team2.map(m => m.hp),
-      t1ActiveIdx: t1Idx, t2ActiveIdx: t2Idx, action: 'start'
+    const ticks = [];
+    const alive = (pid) => units.filter(u => u.playerId === pid && u.alive);
+
+    ticks.push({
+      unitHPs: units.map(u => u.hp), unitCols: units.map(u => u.col),
+      unitRows: units.map(u => u.row), unitAlive: units.map(u => u.alive), events: []
     });
 
-    let r = 1;
+    let tick = 0;
+    while (tick < 1200 && alive(player1.id).length > 0 && alive(player2.id).length > 0) {
+      tick++;
+      const events = [];
 
-    while (t1Idx < team1.length && t2Idx < team2.length) {
-      const atkM = team1[t1Idx];
-      const defM = team2[t2Idx];
-      const dmg1 = this.calcDamage(atkM, defM);
-      defM.hp -= dmg1;
-      if (dmg1 === 0) {
-        log.push(`[回合${r}] ${atkM.name} 无法攻击 ${defM.name}(空中单位)`);
-      } else {
-        log.push(`[回合${r}] ${atkM.name} → ${defM.name} -${dmg1} (HP:${Math.max(0, defM.hp)}/${defM.maxHp})`);
-      }
-      rounds.push({
-        attacker: 1, damage: dmg1,
-        team1HPs: team1.map(m => Math.max(0, m.hp)),
-        team2HPs: team2.map(m => Math.max(0, m.hp)),
-        t1ActiveIdx: t1Idx, t2ActiveIdx: t2Idx
-      });
-      if (defM.hp <= 0) {
-        log.push(`💀 ${defM.name} 倒下！`);
-        t2Idx++;
-        if (t2Idx >= team2.length) break;
+      for (const u of units) {
+        if (!u.alive) continue;
+        u.cooldown = Math.max(0, u.cooldown - 1);
+        const enemies = u.playerId === player1.id ? alive(player2.id) : alive(player1.id);
+        if (enemies.length === 0) break;
+
+        let target = null, bestDist = Infinity;
+        for (const e of enemies) {
+          const d = Math.abs(u.col - e.col) + Math.abs(u.row - e.row);
+          if (d < bestDist || (d === bestDist && e.hp < bestDist)) { bestDist = d; target = e; }
+        }
+        if (!target) continue;
+
+        const range = u.monster.range || 1;
+        if (bestDist > range && u.cooldown <= 0) {
+          let moved = false;
+          const dc = Math.sign(target.col - u.col);
+          const dr = Math.sign(target.row - u.row);
+          if (dc !== 0) {
+            const nc = u.col + dc;
+            if (!units.some(ou => ou !== u && ou.alive && ou.col === nc && ou.row === u.row)) { u.col = nc; moved = true; }
+          }
+          if (!moved && dr !== 0) {
+            const nr = u.row + dr;
+            if (!units.some(ou => ou !== u && ou.alive && ou.col === u.col && ou.row === nr)) { u.row = nr; moved = true; }
+          }
+          if (moved) events.push({ type: 'move', unitId: u.id });
+        } else if (bestDist <= range && u.cooldown <= 0) {
+          const dmg = this.calcDamage(u.monster, target.monster);
+          target.hp -= dmg;
+          u.cooldown = Math.ceil(100 / u.monster.speed);
+          events.push({
+            type: u.monster.type === 'ranged' ? 'ranged' : 'melee',
+            attackerId: u.id, targetId: target.id, damage: dmg
+          });
+          if (dmg === 0) {
+            log.push(`[T${tick}] ${u.monster.name} 无法攻击 ${target.monster.name}(空中单位)`);
+          } else {
+            log.push(`[T${tick}] ${u.monster.name} → ${target.monster.name} -${dmg} (HP:${Math.max(0,target.hp)})`);
+          }
+          if (target.hp <= 0) {
+            target.alive = false;
+            events.push({ type: 'death', unitId: target.id });
+            log.push(`💀 ${target.monster.name} 倒下！`);
+          }
+        }
       }
 
-      const atkM2 = team2[t2Idx];
-      const defM2 = team1[t1Idx];
-      const dmg2 = this.calcDamage(atkM2, defM2);
-      defM2.hp -= dmg2;
-      if (dmg2 === 0) {
-        log.push(`[回合${r}] ${atkM2.name} 无法攻击 ${defM2.name}(空中单位)`);
-      } else {
-        log.push(`[回合${r}] ${atkM2.name} → ${defM2.name} -${dmg2} (HP:${Math.max(0, defM2.hp)}/${defM2.maxHp})`);
-      }
-      rounds.push({
-        attacker: 2, damage: dmg2,
-        team1HPs: team1.map(m => Math.max(0, m.hp)),
-        team2HPs: team2.map(m => Math.max(0, m.hp)),
-        t1ActiveIdx: t1Idx, t2ActiveIdx: t2Idx
+      ticks.push({
+        unitHPs: units.map(u => u.hp), unitCols: units.map(u => u.col),
+        unitRows: units.map(u => u.row), unitAlive: units.map(u => u.alive), events
       });
-      if (defM2.hp <= 0) {
-        log.push(`💀 ${defM2.name} 倒下！`);
-        t1Idx++;
-        if (t1Idx >= team1.length) break;
-      }
-      r++;
+
+      if (events.length === 0) tick++; // force advance on stall
     }
 
     log.push('');
     let winner, loser;
-    if (t1Idx >= team1.length && t2Idx >= team2.length) {
-      const t1Remaining = team1.reduce((s, m) => s + Math.max(0, m.hp), 0);
-      const t2Remaining = team2.reduce((s, m) => s + Math.max(0, m.hp), 0);
-      if (t1Remaining >= t2Remaining) { winner = player1; loser = player2; }
-      else { winner = player2; loser = player1; }
-      log.push(`双方同时倒下！${winner.name} 凭借更高的团队血量获胜！`);
-    } else if (t1Idx >= team1.length) {
-      winner = player2; loser = player1;
-      log.push(`🏆 ${winner.name} 获胜！`);
-    } else {
-      winner = player1; loser = player2;
-      log.push(`🏆 ${winner.name} 获胜！`);
-    }
+    if (alive(player1.id).length > 0 && alive(player2.id).length === 0) { winner = player1; loser = player2; }
+    else if (alive(player2.id).length > 0 && alive(player1.id).length === 0) { winner = player2; loser = player1; }
+    else { winner = player1; loser = player2; }
+    log.push(`🏆 ${winner.name} 获胜！`);
 
-    return { winner, loser, log, team1, team2, rounds };
-  }
-
-  calcRoundDelay(m1, m2) {
-    const avgSpeed = (m1.speed + m2.speed) / 2;
-    return Math.max(400, Math.min(1500, GAME_CONFIG.BASE_ATTACK_DELAY / avgSpeed));
+    return { winner, loser, log, units, ticks };
   }
 
   async animateBattle(battle, result) {
-    const m1 = battle.player1.monsters[0];
-    const m2 = battle.player2.monsters[0];
-    const delay = this.calcRoundDelay(m1, m2);
     this.battleLog = [];
-
-    for (let i = 1; i < result.rounds.length; i++) {
-      const rd = result.rounds[i];
-      battle.team1HPs = rd.team1HPs;
-      battle.team2HPs = rd.team2HPs;
-      battle.t1ActiveIdx = rd.t1ActiveIdx;
-      battle.t2ActiveIdx = rd.t2ActiveIdx;
-      battle.attackingSide = rd.attacker;
-      battle.animationTrigger = Date.now();
-
-      const logIdx = i + 1;
-      if (logIdx < result.log.length) {
-        this.battleLog.push(result.log[logIdx]);
-      }
-
-      this.update();
-      await this.delay(delay);
-    }
-
+    battle.tickResult = result;
+    battle.animTick = 0;
+    battle._lastAnimTime = null;
+    battle.animPlaying = true;
+    this.update();
+    await new Promise(resolve => { battle._onAnimEnd = resolve; });
+    battle.tickResult = null;
+    battle.animPlaying = false;
     this.battleLog = result.log;
-    battle.attackingSide = 0;
     this.update();
   }
-
   calcDamage(attacker, defender) {
     if (attacker.type === 'melee' && defender.type === 'flying') {
       return 0;

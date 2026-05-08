@@ -425,67 +425,213 @@
         return;
       }
 
-      const p1 = battle.player1;
-      const p2 = battle.player2;
-      const monsters1 = p1.monsters || [];
-      const monsters2 = p2.monsters || [];
-
-      const hp1 = battle.resolved ? (battle.team1FinalHPs || []) : (battle.team1HPs || []);
-      const hp2 = battle.resolved ? (battle.team2FinalHPs || []) : (battle.team2HPs || []);
-      const active1 = battle.t1ActiveIdx || 0;
-      const active2 = battle.t2ActiveIdx || 0;
-
-      const winnerId = battle.resolved ? battle.winner : null;
-      const COLS = 5;
-
-      function renderTeamColumns(monsters, hps, activeIdx, player, side) {
-        const isWinner = winnerId === player.id;
-        const cols = [];
-        for (let i = 0; i < monsters.length; i += COLS) {
-          cols.push(monsters.slice(i, i + COLS));
-        }
-
-        return cols.map((col, colIdx) => {
-          const monstersHtml = col.map((m, i) => {
-            const globalIdx = colIdx * COLS + i;
-            const maxHp = m.hp;
-            const curHp = (hps && globalIdx < hps.length) ? Math.max(0, hps[globalIdx]) : maxHp;
-            const hpPercent = maxHp > 0 ? Math.max(0, (curHp / maxHp) * 100) : 0;
-            const hpClass = hpPercent <= 30 ? 'low' : '';
-            const isDead = curHp <= 0;
-            const isActive = globalIdx === activeIdx && !isDead && !battle.resolved;
-            const activeClass = isActive ? ' active' : '';
-            const winnerClass = isWinner ? ' winner' : '';
-            const attackingClass = battle.attackingSide === side && isActive ? ' attacking' : '';
-
-            return `<div class="team-monster${winnerClass}${activeClass}${isDead ? ' dead' : ''}${attackingClass}" style="text-align:center;">
-              <div class="tm-icon">${m.icon}</div>
-              <div class="c-hp-bar-outer"><div class="c-hp-bar-inner ${hpClass}" style="width:${hpPercent}%"></div></div>
-              <div class="c-hp-text">${curHp}/${maxHp}</div>
-            </div>`;
-          }).join('');
-
-          return `<div class="team-column">${monstersHtml}</div>`;
-        }).join('');
+      const tr = battle.tickResult;
+      if (!tr || !battle.animPlaying) {
+        const p1 = battle.player1;
+        const p2 = battle.player2;
+        container.innerHTML = `<div style="text-align:center;padding:20px;color:#888;">
+          <span style="color:#ffd700;font-size:1.2em;">${p1.name}(${p1.monsters.length}只) ⚡VS⚡ ${p2.name}(${p2.monsters.length}只)</span>
+          <br>战斗即将开始...
+        </div>`;
+        return;
       }
 
-      container.innerHTML = `
-        <div class="battle-arena-vs">
-          <div class="team-area" data-side="1">
-            <div class="c-player">${p1.name}${p1.isHuman ? ' 👑' : ''}</div>
-            <div class="team-columns-wrap">
-              ${renderTeamColumns(monsters1, hp1, active1, p1, 1)}
-            </div>
-          </div>
-          <div class="vs-badge">⚡VS⚡</div>
-          <div class="team-area" data-side="2">
-            <div class="c-player">${p2.name}${p2.isHuman ? ' 👑' : ''}</div>
-            <div class="team-columns-wrap">
-              ${renderTeamColumns(monsters2, hp2, active2, p2, 2)}
-            </div>
-          </div>
-        </div>
-      `;
+      // Canvas rendering for tick-based battle
+      let canvas = container.querySelector('canvas');
+      if (!canvas) {
+        container.innerHTML = '';
+        canvas = document.createElement('canvas');
+        canvas.id = 'battle-canvas';
+        canvas.width = 740;
+        canvas.height = 400;
+        container.appendChild(canvas);
+      }
+      const ctx = canvas.getContext('2d');
+
+      const COLS = GAME_CONFIG.BATTLE_COLS;
+      const ROWS = GAME_CONFIG.BATTLE_ROWS;
+      const CELL = GAME_CONFIG.BATTLE_CELL;
+      const OX = 30, OY = 20;
+      const CW = COLS * CELL, CH = ROWS * CELL;
+
+      const ticks = tr.ticks;
+      const units = tr.units;
+      const player1Id = tr.player1Id;
+      const player2Id = tr.player2Id;
+
+      // Determine current tick to display
+      if (battle._lastAnimTime == null) battle._lastAnimTime = performance.now();
+      const now = performance.now();
+      const elapsed = now - battle._lastAnimTime;
+      const tickDur = GAME_CONFIG.BATTLE_DRAW_MS;
+      const advance = Math.floor(elapsed / tickDur);
+      if (advance > 0) {
+        battle.animTick = Math.min(battle.animTick + advance, ticks.length - 1);
+        battle._lastAnimTime = now;
+      }
+
+      const tickIdx = battle.animTick;
+      const tickData = ticks[tickIdx] || ticks[ticks.length - 1];
+      const prevTick = tickIdx > 0 ? ticks[tickIdx - 1] : ticks[0];
+
+      // Interpolation factor
+      const frac = (elapsed % tickDur) / tickDur;
+
+      // --- DRAW ---
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#0a0a1a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Grid
+      for (let c = 0; c < COLS; c++) {
+        for (let r = 0; r < ROWS; r++) {
+          const x = OX + c * CELL, y = OY + r * CELL;
+          ctx.strokeStyle = c < COLS / 2 ? 'rgba(52,152,219,0.15)' : 'rgba(231,76,60,0.15)';
+          ctx.strokeRect(x, y, CELL, CELL);
+        }
+      }
+      // Center line
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(OX + CW / 2, OY);
+      ctx.lineTo(OX + CW / 2, OY + CH);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+
+      // Draw units
+      const col1 = tickData.unitCols, row1 = tickData.unitRows, hp1 = tickData.unitHPs, al1 = tickData.unitAlive;
+      const col0 = prevTick.unitCols, row0 = prevTick.unitRows;
+
+      for (let i = 0; i < units.length; i++) {
+        if (!al1[i]) continue;
+        const u = units[i];
+        const mx = col0[i] + (col1[i] - col0[i]) * frac;
+        const my = row0[i] + (row1[i] - row0[i]) * frac;
+        const cx = OX + mx * CELL, cy = OY + my * CELL;
+        const hp = Math.max(0, hp1[i]);
+        const hpPct = hp / u.maxHp;
+
+        const isPlayer1 = u.playerId === player1Id;
+        ctx.fillStyle = isPlayer1 ? 'rgba(52,152,219,0.25)' : 'rgba(231,76,60,0.25)';
+        ctx.fillRect(cx + 2, cy + 2, CELL - 4, CELL - 4);
+
+        // Icon
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(u.monster.icon, cx + CELL / 2, cy + CELL / 2 - 4);
+
+        // HP bar
+        const barW = CELL - 8, barH = 4, barX = cx + 4, barY = cy + CELL - 10;
+        ctx.fillStyle = '#333';
+        ctx.fillRect(barX, barY, barW, barH);
+        const hpColor = hpPct > 0.3 ? `rgb(${Math.floor(255*(1-hpPct))},${Math.floor(255*hpPct)},0)` : '#e74c3c';
+        ctx.fillStyle = hpColor;
+        ctx.fillRect(barX, barY, barW * hpPct, barH);
+
+        // HP text
+        ctx.fillStyle = '#ccc';
+        ctx.font = '9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(Math.ceil(hp) + '/' + u.maxHp, cx + CELL / 2, cy + CELL + 12);
+      }
+
+      // Events (projectiles, slashes, damage numbers)
+      const events = tickData.events || [];
+      for (const ev of events) {
+        if (ev.type === 'melee') {
+          const au = units.find(u => u.id === ev.attackerId);
+          const tu = units.find(u => u.id === ev.targetId);
+          if (au && tu) {
+            const ax = OX + col1[units.indexOf(au)] * CELL + CELL / 2;
+            const ay = OY + row1[units.indexOf(au)] * CELL + CELL / 2;
+            const tx = OX + col1[units.indexOf(tu)] * CELL + CELL / 2;
+            const ty = OY + row1[units.indexOf(tu)] * CELL + CELL / 2;
+            // Slash arc
+            ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(ax, ay, CELL * 0.7, Math.atan2(ty - ay, tx - ax) - 0.4, Math.atan2(ty - ay, tx - ax) + 0.4);
+            ctx.stroke();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = 'rgba(255,215,0,0.6)';
+            ctx.stroke();
+            ctx.lineWidth = 1;
+          }
+        } else if (ev.type === 'ranged') {
+          const au = units.find(u => u.id === ev.attackerId);
+          const tu = units.find(u => u.id === ev.targetId);
+          if (au && tu) {
+            const ax = OX + col1[units.indexOf(au)] * CELL + CELL / 2;
+            const ay = OY + row1[units.indexOf(au)] * CELL + CELL / 2;
+            const tx = OX + col1[units.indexOf(tu)] * CELL + CELL / 2;
+            const ty = OY + row1[units.indexOf(tu)] * CELL + CELL / 2;
+            const px = ax + (tx - ax) * frac;
+            const py = ay + (ty - ay) * frac;
+            // Bullet trail
+            ctx.strokeStyle = 'rgba(255,200,50,0.5)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(px, py);
+            ctx.stroke();
+            ctx.lineWidth = 1;
+            // Bullet
+            ctx.fillStyle = '#ffd700';
+            ctx.beginPath();
+            ctx.arc(px, py, 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else if (ev.type === 'death') {
+          const du = units.find(u => u.id === ev.unitId);
+          if (du) {
+            const dx = OX + col1[units.indexOf(du)] * CELL + CELL / 2;
+            const dy = OY + row1[units.indexOf(du)] * CELL + CELL / 2;
+            ctx.fillStyle = 'rgba(255,0,0,0.4)';
+            ctx.beginPath();
+            ctx.arc(dx, dy, CELL * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+
+      // Damage numbers
+      for (const ev of events) {
+        if ((ev.type === 'melee' || ev.type === 'ranged') && ev.damage > 0) {
+          const tu = units.find(u => u.id === ev.targetId);
+          if (tu) {
+            const tx = OX + col1[units.indexOf(tu)] * CELL + CELL / 2;
+            const ty = OY + row1[units.indexOf(tu)] * CELL + 2;
+            ctx.fillStyle = ev.type === 'ranged' ? '#ffd700' : '#ff6600';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.globalAlpha = 1 - frac;
+            ctx.fillText('-' + ev.damage, tx, ty - 4 - frac * 10);
+            ctx.globalAlpha = 1;
+          }
+        }
+      }
+
+      // Check if animation is complete
+      if (battle.animTick >= ticks.length - 1) {
+        // Show winner overlay
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 28px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('🏆 ' + tr.winner.name + ' 获胜！', canvas.width / 2, canvas.height / 2);
+        ctx.font = '14px sans-serif';
+        ctx.fillStyle = '#ccc';
+        ctx.fillText('点击进入下一轮', canvas.width / 2, canvas.height / 2 + 40);
+
+        setTimeout(() => {
+          if (battle._onAnimEnd) { battle._onAnimEnd(); battle._onAnimEnd = null; }
+        }, 500);
+      }
+
+      requestAnimationFrame(() => renderBattleArena(g));
     }
 
     function renderBattleLog(g) {
