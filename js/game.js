@@ -53,10 +53,8 @@ class Player {
 class Game {
   constructor() {
     this.state = 'MENU';
-    this.mode = 'single';
     this.players = [];
     this.humanPlayer = null;
-    this.humanSlots = [];    // multiplayer guest player IDs
     this.currentRound = 0;
     this.auctionMonsters = [];
     this.auctionIndex = 0;
@@ -79,13 +77,6 @@ class Game {
     this._auctionEndTimer = null;
     this._aiCheckTimer = null;
     this._auctionRunning = false;
-
-    this._mpActions = [];    // queued remote bids for current auction
-    this._mpBets = [];       // queued remote bets
-  }
-
-  setNetwork(net) {
-    this.net = net;
   }
 
   registerUpdate(callback) {
@@ -94,119 +85,21 @@ class Game {
 
   update() {
     if (this.onUpdate) this.onUpdate(this);
-    if (this.mode === 'host') this._broadcastState();
   }
 
-  _broadcastState() {
-    if (this.net && this.net.isHost) {
-      this.net.broadcastState(this.getSnapshot());
-    }
-  }
-
-  getSnapshot() {
-    const sp = (p) => ({
-      id: p.id, name: p.name, isHuman: p.isHuman,
-      gold: p.gold, monsters: [...p.monsters], score: p.score,
-      totalSpent: p.totalSpent, isEliminated: p.isEliminated,
-      betStyle: p.betStyle, betFreq: p.betFreq,
-      _isRemote: p._isRemote, _remoteId: p._remoteId,
-    });
-    return {
-      st: this.state, rnd: this.currentRound,
-      aIdx: this.auctionIndex, aRev: this.auctionRevealed,
-      aMonsters: this.auctionMonsters.map(g => ({ monster: g.monster, count: g.count })),
-      aHighBidder: this.auctionHighBidder, aHighBid: this.auctionHighBid,
-      aCountdownEnd: this.auctionCountdownEnd,
-      aBidResult: this.auctionBidResult,
-      players: this.players.map(sp),
-      humanId: this.humanPlayer ? this.humanPlayer.id : null,
-      battles: this.battles.map(b => ({
-        id: b.id, resolved: b.resolved, winner: b.winner,
-        p1id: b.player1.id, p2id: b.player2.id,
-        tickResult: b.tickResult, animPlaying: b.animPlaying, animTick: b.animTick,
-      })),
-      currBattleId: this.currentBattle ? this.currentBattle.id : null,
-      bracket: this.tournamentBracket.map(r => ({
-        pairs: r.pairs ? r.pairs.map(pr => [pr[0].id, pr[1].id]) : [],
-        byePlayer: r.byePlayer ? r.byePlayer.id : null,
-      })),
-      bLog: this.battleLog, bResults: this.battleResults,
-      bets: this.bets,
-    };
-  }
-
-  applySnapshot(data) {
-    if (this.mode !== 'guest') return;
-    this.state = data.st;
-    this.currentRound = data.rnd;
-    this.auctionIndex = data.aIdx;
-    this.auctionRevealed = data.aRev;
-    this.auctionMonsters = data.aMonsters;
-    this.auctionHighBidder = data.aHighBidder;
-    this.auctionHighBid = data.aHighBid;
-    this.auctionCountdownEnd = data.aCountdownEnd;
-    this.auctionBidResult = data.aBidResult;
-    this.battleLog = data.bLog;
-    this.battleResults = data.bResults;
-    this.bets = data.bets;
-
-    const pm = {};
-    this.players = data.players.map(pd => {
-      const p = new Player(pd.id, pd.name, pd.isHuman, pd.betStyle, pd.betFreq);
-      p.gold = pd.gold; p.monsters = pd.monsters; p.score = pd.score;
-      p.totalSpent = pd.totalSpent; p.isEliminated = pd.isEliminated;
-      p._isRemote = pd._isRemote; p._remoteId = pd._remoteId;
-      pm[p.id] = p;
-      return p;
-    });
-    this.humanPlayer = this.players.find(p => p.id === data.humanId);
-    this.battles = data.battles.map(bd => ({
-      id: bd.id, resolved: bd.resolved, winner: bd.winner,
-      player1: pm[bd.p1id], player2: pm[bd.p2id],
-      tickResult: bd.tickResult, animPlaying: bd.animPlaying, animTick: bd.animTick,
-    }));
-    this.currentBattle = this.battles.find(b => b.id === data.currBattleId) || null;
-    this.tournamentBracket = data.bracket.map(r => ({
-      pairs: r.pairs.map(pr => [pm[pr[0]], pm[pr[1]]]),
-      byePlayer: r.byePlayer ? pm[r.byePlayer] : null,
-    }));
-    this.update();
-  }
-
-  startMultiplayerHost(playerName, guestPlayers, aiCount) {
-    this.mode = 'host';
+  startGame(playerName, aiCount) {
     this.players = [];
-    this.humanSlots = [];
-
     this.humanPlayer = new Player('p0', playerName || '你', true);
     this.players.push(this.humanPlayer);
 
-    guestPlayers.forEach((gp, i) => {
-      const p = new Player(`h${i + 1}`, gp.name, true);
-      p._isRemote = true;
-      p._remoteId = gp.id;
-      this.players.push(p);
-      this.humanSlots.push(p.id);
-    });
-
     const shuffledAi = AI_PLAYERS.slice().sort(() => Math.random() - 0.5);
-    const totalHumans = 1 + guestPlayers.length;
     for (let i = 0; i < Math.min(aiCount, AI_PLAYERS.length); i++) {
       const cfg = shuffledAi[i];
-      this.players.push(new Player(`p${totalHumans + i}`, cfg.name, false, cfg.betStyle, cfg.betFreq));
+      this.players.push(new Player(`p${i + 1}`, cfg.name, false, cfg.betStyle, cfg.betFreq));
     }
 
     this.currentRound = 0;
     this.startAuctionRound();
-  }
-
-  startMultiplayerGuest(playerName) {
-    this.mode = 'guest';
-    this.players = [];
-    this.humanPlayer = new Player('p0', playerName || '你', true);
-    this.players.push(this.humanPlayer);
-    this.state = 'WAITING';
-    this.update();
   }
 
   startAuctionRound() {
@@ -456,22 +349,6 @@ class Game {
     this.auctionBidHistory.push({ playerId: this.humanPlayer.id, bid: amount });
     this.startCountdown();
     return true;
-  }
-
-  processRemoteBid(remotePlayerId, amount) {
-    if (this.state !== 'AUCTION' || !this._auctionRunning) return;
-    if (amount <= this.auctionHighBid) return;
-    const player = this.players.find(p => p.id === remotePlayerId);
-    if (!player || amount > player.gold) return;
-    this.auctionHighBidder = player.id;
-    this.auctionHighBid = amount;
-    this.currentBids[player.id] = amount;
-    this.auctionBidHistory.push({ playerId: player.id, bid: amount });
-    this.startCountdown();
-  }
-
-  processRemoteBet(remotePlayerId, battleId, chosenPlayerId) {
-    this.placeBet(remotePlayerId, battleId, chosenPlayerId);
   }
 
   waitForCountdown() {
@@ -930,8 +807,6 @@ class Game {
 
   restartGame() {
     this.state = 'MENU';
-    this.mode = 'single';
-    this.humanSlots = [];
     this.players = [];
     this.humanPlayer = null;
     this.currentRound = 0;
